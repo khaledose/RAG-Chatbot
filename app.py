@@ -1,83 +1,87 @@
 import streamlit as st
-import mimetypes
-from model import create_rag_chain, create_vector_store, get_existing_vector_stores, is_valid_store_name, update_embeddings_db, create_vector_store
-from langchain.schema import Document
+from services.rag import RAGService
+from services.vector_store import VectorStoreService
+from dotenv import load_dotenv
+from utils.files import create_temp_dir, detect_file_type
 
-def detect_file_type(file):
-    if file is None:
-        return None
-    
-    file_type = mimetypes.guess_type(file.name)[0]
-    if file_type:
-        if 'json' in file_type:
-            return 'json'
-        elif 'pdf' in file_type:
-            return 'pdf'
-        elif 'csv' in file_type:
-            return 'csv'
-    
-    file_extension = file.name.split('.')[-1].lower()
-    if file_extension in ['json', 'pdf', 'csv']:
-        return file_extension
-    
-    return None
+def reset_session():
+    rag.reset(session_id)
+    st.session_state.messages.clear()
+    refresh_store_list()
 
-def handle_vector_store_creation(uploaded_files, store_name):
-    progress_bar = st.sidebar.progress(0)
-    status_text = st.sidebar.empty()
-    
-    total_files = len(uploaded_files)
-    for i, file in enumerate(uploaded_files):
-        file_type = detect_file_type(file)
-        if file_type:
-            status_text.text(f"Processing file {i+1} of {total_files}: {file.name}")
-            update_embeddings_db(file, store_name, file_type)
-            progress_bar.progress((i + 1) / total_files)
-    
-    progress_bar.empty()
-    status_text.empty()
-    st.sidebar.success(f"Vector store '{store_name}' created successfully!")
+def session_interface():
+    session_store = st.sidebar.selectbox("Select Vector Store", st.session_state.existing_stores, key="chat_store")
+    st.session_state.current_store = session_store
+    reset_button = st.sidebar.button("Reset Session")
+    if reset_button:
+        reset_session()
+
+def refresh_store_list():
+    st.session_state.existing_stores = vector_store.get_all()
     st.rerun()
 
-def vector_store_management_sidebar():
-    st.sidebar.header("Vector Store Management")
+def update_store_interface():
+    upload_expander = st.sidebar.expander(f"Update Store")
+    selected_store = upload_expander.selectbox("Select Vector Store", st.session_state.existing_stores, key="existing_store")
+    uploaded_files = upload_expander.file_uploader(f"Add file to {selected_store}", type=['json', 'pdf', 'csv'], accept_multiple_files=True, key="existing_store_files")
+    upload_expander.subheader("Or")
 
-    # Section 1: Create a new vector store (without file upload)
-    st.sidebar.subheader("Create New Vector Store")
-    new_store_name = st.sidebar.text_input("New Vector Store Name", key="new_store_name")
+    web_url = upload_expander.text_input(f"Add Web page to {selected_store}")
+    if upload_expander.button("Add Files", key="add_to_existing_store", type="primary"):
+        with st.sidebar.spinner("Reading files.."):
+            total_files = len(uploaded_files)
+            if total_files > 0:
+                progress_bar = upload_expander.progress(0)
+                status_text = upload_expander.empty()
+                for i, file in enumerate(uploaded_files):
+                    file_type = detect_file_type(file)
+                    if file_type:
+                        status_text.text(f"Processing file {i+1} of {total_files}: {file.name}")
+                        vector_store.update(create_temp_dir(file), selected_store, file_type)
+                        progress_bar.progress((i + 1) / total_files)
+                progress_bar.empty()
+                status_text.empty()
+            
+            if web_url:
+                vector_store.update(web_url, selected_store, "web")
+            
+            st.toast(f"Vector store '{selected_store}' updated successfully!")
+
+def create_store_interface():
+    create_expander = st.sidebar.expander("Create store")
+    new_store_name = create_expander.text_input("New Vector Store", key="new_store_name")
     
-    if new_store_name:
-        if is_valid_store_name(new_store_name):
-            if st.sidebar.button("Create", key="create_new_store", type="primary"):
-                # Create an empty vector store (without uploading files)
-                # This can simply create a Chroma store without any documents
-                create_vector_store(new_store_name)
-                st.sidebar.success(f"New vector store '{new_store_name}' created successfully!")
-                st.rerun()
-        else:
-            st.sidebar.error("This vector store name already exists. Please choose a unique name.")
+    if vector_store.exists(new_store_name):
+        create_expander.error(f"Vector store '{new_store_name}' already exists!")
 
-    st.sidebar.markdown("---")  # Add a separator
+    if create_expander.button("Create", key="create_new_store", type="primary", disabled=vector_store.exists(new_store_name)):
+        vector_store.create(new_store_name)
+        refresh_store_list()
 
-    # Section 2: Manage existing vector stores
-    st.sidebar.subheader("Manage Existing Vector Stores")
-    existing_stores = get_existing_vector_stores()
-    selected_store = st.sidebar.selectbox("Select Vector Store", existing_stores, key="existing_store")
+def delete_store_interface():
+    delete_expander = st.sidebar.expander("Delete store")
+    delete_store = delete_expander.selectbox("Select Vector Store", st.session_state.existing_stores, key="delete_store")
+    if delete_store == st.session_state.current_store:
+        delete_expander.error("Cannot delete store that is already selected!")
+    delete_button = delete_expander.button("Delete", type="primary", disabled=delete_store == st.session_state.current_store)
+    if delete_button:
+        vector_store.delete(delete_store)
+        refresh_store_list()
 
-    if selected_store:
-        # Allow file upload for selected store
-        uploaded_files_existing_store = st.sidebar.file_uploader(f"Upload files to '{selected_store}'", type=['json', 'pdf', 'csv'], accept_multiple_files=True, key="existing_store_files")
+def sidebar_interface():
+    st.sidebar.header("Manage Session")
 
-        if uploaded_files_existing_store:
-            if st.sidebar.button("Add Files", key="add_to_existing_store", type="primary"):
-                handle_vector_store_creation(uploaded_files_existing_store, selected_store)
+    session_interface()
+    
+    st.sidebar.header("Manage Vector Stores")
 
-    return selected_store
+    update_store_interface()
+    
+    create_store_interface()
+    
+    delete_store_interface()
 
-def format_docs(docs):
-    return "\n\n".join(f"Source: {doc.metadata.get('source', 'Unknown')}\n{doc.page_content}" for doc in docs)
-
-def chat_interface(rag_chain):
+def chat_interface():
     for msg in st.session_state.messages:
         st.chat_message(msg["role"]).write(msg["content"])
 
@@ -88,14 +92,11 @@ def chat_interface(rag_chain):
         with st.chat_message("assistant"):
             response_placeholder = st.empty()
             full_response = ""
-
-            for chunk in rag_chain.stream({"input": prompt}):
-                if isinstance(chunk, Document):  # This is a source document
-                    st.write(f"Source: {chunk.metadata.get('source', 'Unknown')}")
-                    st.write(chunk.page_content)
-                else:  # This is a response chunk
-                    full_response += chunk
-                    response_placeholder.markdown(full_response + "▌")
+            
+            rag.build(st.session_state.get("current_store"))
+            for chunk in rag.chat(session_id, prompt):
+                full_response += chunk
+                response_placeholder.markdown(full_response + "▌")
             
             response_placeholder.markdown(full_response)
 
@@ -104,16 +105,23 @@ def chat_interface(rag_chain):
 def main():
     st.title("💬 Enhanced RAG Chatbot")
 
-    selected_store = vector_store_management_sidebar()
+    if "existing_stores" not in st.session_state:
+        st.session_state.existing_stores = vector_store.get_all()
+
+    if "current_store" not in st.session_state:
+        st.session_state.current_store = None
+    
+    sidebar_interface()
 
     if "messages" not in st.session_state:
         st.session_state.messages = [{"role": "assistant", "content": "How can I help you?"}]
     
-    if "rag_chain" not in st.session_state or st.session_state.get("current_store") != selected_store:
-        st.session_state.rag_chain = create_rag_chain(selected_store)
-        st.session_state.current_store = selected_store
-
-    chat_interface(st.session_state.rag_chain)
+    if st.session_state.current_store is not None:
+        chat_interface()
 
 if __name__ == "__main__":
+    load_dotenv()
+    session_id = "123"
+    vector_store = VectorStoreService()
+    rag = RAGService(vector_store)
     main()
