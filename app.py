@@ -1,127 +1,197 @@
+import os
+from typing import List
 import streamlit as st
-from services.rag import RAGService
-from services.vector_store import VectorStoreService
+from typing import Any
 from dotenv import load_dotenv
-from utils.files import create_temp_dir, detect_file_type
+from services.chat import ChatService
+from services.session import SessionService
+from services.vector_store import VectorStoreService
 
-def reset_session():
-    rag.reset(session_id)
-    st.session_state.messages.clear()
-    refresh_store_list()
+# Initialize services
+load_dotenv()
+url = os.getenv('API_URL')
+session_service = SessionService(url)
+vector_store_service = VectorStoreService(url)
+chat_service = ChatService(url)
 
-def session_interface():
-    session_store = st.sidebar.selectbox("Select Vector Store", st.session_state.existing_stores, key="chat_store")
-    st.session_state.current_store = session_store
-    reset_button = st.sidebar.button("Reset Session")
-    if reset_button:
-        reset_session()
+class SessionInterface:
+    @staticmethod
+    def render():
+        st.sidebar.selectbox(
+            "Select context", 
+            st.session_state.existing_stores, 
+            key="chat_store", 
+            on_change=SessionInterface._store_changed,
+        )
+        
+        if st.sidebar.button("New Session", use_container_width=True):
+            new_session_id = session_service.create()
+            st.session_state['sessions'].append(new_session_id)
+            SessionInterface._switch_session(new_session_id)
+        
+        sessions_expander = st.sidebar.expander("Sessions")
+        SessionInterface._render_session_list(sessions_expander)
+        SessionInterface._render_clear_sessions_button(sessions_expander)
 
-def refresh_store_list():
-    st.session_state.existing_stores = vector_store.get_all()
-    st.rerun()
+    @staticmethod
+    def _render_session_list(expander):
+        for item in st.session_state['sessions']:
+            container = expander.container()
+            cols = container.columns([0.8, 0.2], vertical_alignment='center')
+            if cols[0].button(item, key=f"session_{item}", use_container_width=True):
+                SessionInterface._switch_session(item)
+            if cols[1].button("❌", key=f"delete_{item}", use_container_width=True):
+                SessionInterface._delete_session(item)
 
-def update_store_interface():
-    upload_expander = st.sidebar.expander(f"Update Store")
-    selected_store = upload_expander.selectbox("Select Vector Store", st.session_state.existing_stores, key="existing_store")
-    uploaded_files = upload_expander.file_uploader(f"Add file to {selected_store}", type=['json', 'pdf', 'csv'], accept_multiple_files=True, key="existing_store_files")
-    upload_expander.subheader("Or")
+    @staticmethod
+    def _render_clear_sessions_button(expander):
+        if expander.button("⚠️ Delete All Sessions ⚠️", use_container_width=True):
+            SessionInterface._clear_all_sessions()
+    
+    @staticmethod
+    def _switch_session(session_id: str):
+        st.session_state.session_id = session_id
+        st.session_state.messages = SessionInterface._get_session_messages(session_id)
+        SessionInterface._store_changed()
+    
+    @staticmethod
+    def _store_changed():
+        chat_service.build(st.session_state.chat_store)
 
-    web_url = upload_expander.text_input(f"Add Web page to {selected_store}")
-    if upload_expander.button("Add Files", key="add_to_existing_store", type="primary"):
-        with st.sidebar.spinner("Reading files.."):
-            total_files = len(uploaded_files)
+    @staticmethod
+    def _delete_session(session_id: str):
+        session_service.delete(session_id)
+        st.session_state['sessions'].remove(session_id)
+        if st.session_state.session_id == session_id:
+            st.session_state.session_id = None
+        st.rerun()
+
+    @staticmethod
+    def _clear_all_sessions():
+        session_service.clear()
+        st.session_state.sessions.clear()
+        st.session_state.messages.clear()
+        st.session_state.session_id = None
+        st.rerun()
+
+    @staticmethod
+    def _get_session_messages(session_id: str) -> List[dict]:
+        messages = session_service.get(session_id)
+        return [{"role": m.get('type'), "content": m.get('content')} for m in messages["messages"]]
+
+class VectorStoreInterface:
+    @staticmethod
+    def render():
+        VectorStoreInterface._render_update()
+        VectorStoreInterface._render_create()
+        VectorStoreInterface._render_delete()
+
+    @staticmethod
+    def _render_update():
+        with st.sidebar.expander("Update Store"):
+            selected_store = st.selectbox("Select Vector Store", st.session_state.existing_stores, key="existing_store")
+            uploaded_files = st.file_uploader(f"Add file to {selected_store}", type=['json', 'pdf', 'csv'], accept_multiple_files=True, key="existing_store_files")
+
+            if st.button("Add Files", key="add_to_existing_store", use_container_width=True):
+                VectorStoreInterface._process_uploaded_files(selected_store, uploaded_files)
+
+    @staticmethod
+    def _process_uploaded_files(store: str, files: List[Any]):
+        with st.spinner("Reading files.."):
+            total_files = len(files)
             if total_files > 0:
-                progress_bar = upload_expander.progress(0)
-                status_text = upload_expander.empty()
-                for i, file in enumerate(uploaded_files):
-                    file_type = detect_file_type(file)
-                    if file_type:
-                        status_text.text(f"Processing file {i+1} of {total_files}: {file.name}")
-                        vector_store.update(create_temp_dir(file), selected_store, file_type)
-                        progress_bar.progress((i + 1) / total_files)
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                for i, file in enumerate(files):
+                    status_text.text(f"Processing file {i+1} of {total_files}: {file.name}")
+                    vector_store_service.update(store, file)
+                    progress_bar.progress((i + 1) / total_files)
                 progress_bar.empty()
                 status_text.empty()
+            st.toast(f"Vector store '{store}' updated successfully!")
+
+    @staticmethod
+    def _refresh_store_list():
+        st.session_state.existing_stores = vector_store_service.get_all()
+        st.rerun()
+
+    @staticmethod
+    def _render_create():
+        with st.sidebar.expander("Create store"):
+            new_store_name = st.text_input("New Vector Store", key="new_store_name")
+            if st.button("Create", key="create_new_store", use_container_width=True):
+                vector_store_service.create(new_store_name)
+                VectorStoreInterface._refresh_store_list()
+
+    @staticmethod
+    def _render_delete():
+        with st.sidebar.expander("Delete store"):
+            delete_store = st.selectbox("Select Vector Store", st.session_state.existing_stores, key="delete_store")
+            if delete_store == st.session_state.chat_store:
+                st.error("Cannot delete store that is already selected!")
             
-            if web_url:
-                vector_store.update(web_url, selected_store, "web")
-            
-            st.toast(f"Vector store '{selected_store}' updated successfully!")
+            delete_button = st.button("Delete", use_container_width=True, disabled=delete_store == st.session_state.chat_store)
+            if delete_button:
+                vector_store_service.delete(delete_store)
+                VectorStoreInterface._refresh_store_list()
 
-def create_store_interface():
-    create_expander = st.sidebar.expander("Create store")
-    new_store_name = create_expander.text_input("New Vector Store", key="new_store_name")
-    
-    if vector_store.exists(new_store_name):
-        create_expander.error(f"Vector store '{new_store_name}' already exists!")
+class ChatInterface:
+    @staticmethod
+    def render():
+        ChatInterface._display_messages()
+        ChatInterface._handle_user_input()
 
-    if create_expander.button("Create", key="create_new_store", type="primary", disabled=vector_store.exists(new_store_name)):
-        vector_store.create(new_store_name)
-        refresh_store_list()
+    @staticmethod
+    def _display_messages():
+        for msg in st.session_state.messages:
+            st.chat_message(msg["role"]).write(msg["content"])
 
-def delete_store_interface():
-    delete_expander = st.sidebar.expander("Delete store")
-    delete_store = delete_expander.selectbox("Select Vector Store", st.session_state.existing_stores, key="delete_store")
-    if delete_store == st.session_state.current_store:
-        delete_expander.error("Cannot delete store that is already selected!")
-    delete_button = delete_expander.button("Delete", type="primary", disabled=delete_store == st.session_state.current_store)
-    if delete_button:
-        vector_store.delete(delete_store)
-        refresh_store_list()
+    @staticmethod
+    def _handle_user_input():
+        if prompt := st.chat_input():
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            st.chat_message("user").write(prompt)
 
-def sidebar_interface():
-    st.sidebar.header("Manage Session")
+            with st.chat_message("assistant"):
+                ChatInterface._stream_response(prompt)
 
-    session_interface()
-    
-    st.sidebar.header("Manage Vector Stores")
-
-    update_store_interface()
-    
-    create_store_interface()
-    
-    delete_store_interface()
-
-def chat_interface():
-    for msg in st.session_state.messages:
-        st.chat_message(msg["role"]).write(msg["content"])
-
-    if prompt := st.chat_input():
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        st.chat_message("user").write(prompt)
-
-        with st.chat_message("assistant"):
-            response_placeholder = st.empty()
-            full_response = ""
-            
-            rag.build(st.session_state.get("current_store"))
-            for chunk in rag.chat(session_id, prompt):
-                full_response += chunk
-                response_placeholder.markdown(full_response + "▌")
-            
-            response_placeholder.markdown(full_response)
-
+    @staticmethod
+    def _stream_response(prompt: str):
+        response_placeholder = st.empty()
+        full_response = ""
+        
+        for chunk in chat_service.chat(st.session_state.chat_store, st.session_state.session_id, prompt):
+            full_response += chunk
+            response_placeholder.markdown(full_response + "▌")
+        
+        response_placeholder.markdown(full_response)
         st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-def main():
-    st.title("💬 Enhanced RAG Chatbot")
+class App:
+    @staticmethod
+    def initialize_session_state():
+        if "session_id" not in st.session_state:
+            st.session_state.session_id = None
+        if "existing_stores" not in st.session_state:
+            st.session_state.existing_stores = vector_store_service.get_all()
+        if 'sessions' not in st.session_state:
+            st.session_state['sessions'] = session_service.get_all()
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
 
-    if "existing_stores" not in st.session_state:
-        st.session_state.existing_stores = vector_store.get_all()
+    @staticmethod
+    def render():
+        st.title("💬 Stream Buddy")
+        App.initialize_session_state()
 
-    if "current_store" not in st.session_state:
-        st.session_state.current_store = None
-    
-    sidebar_interface()
+        st.sidebar.header("Manage Session")
+        SessionInterface.render()
+        
+        st.sidebar.header("Manage Vector Stores")
+        VectorStoreInterface.render()
 
-    if "messages" not in st.session_state:
-        st.session_state.messages = [{"role": "assistant", "content": "How can I help you?"}]
-    
-    if st.session_state.current_store is not None:
-        chat_interface()
+        if st.session_state.chat_store is not None and st.session_state.session_id is not None:
+            ChatInterface.render()
 
 if __name__ == "__main__":
-    load_dotenv()
-    session_id = "123"
-    vector_store = VectorStoreService()
-    rag = RAGService(vector_store)
-    main()
+    App.render()
