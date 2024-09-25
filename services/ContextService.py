@@ -14,7 +14,7 @@ class ContextService(BaseService):
         response = requests.post(url, json=data)
         return self._handle_response(response)
 
-    def update(self, context_name: str, file: Any) -> Dict[str, str]:
+    def add_file(self, context_name: str, file: Any) -> Dict[str, str]:
         supported_files = ["application/pdf", "text/csv", "application/json", "text/plain"]
         file_type = file.type
         if file_type not in supported_files:    
@@ -24,6 +24,11 @@ class ContextService(BaseService):
             url, 
             files={'file': (file.name, file.getvalue(), file_type)}
         )
+        return self._handle_response(response)
+
+    def add_webpage(self, context_name: str, url: str) -> Dict[str, str]:
+        url = f"{self.base_url}/{context_name}/web?url={url}"
+        response = requests.post(url)
         return self._handle_response(response)
 
     def delete(self, context_name: str) -> Dict[str, str]:

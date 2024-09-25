@@ -91,9 +91,10 @@ class ContextInterface:
         with st.sidebar.expander("Update Context"):
             selected_context = st.selectbox("Select Context", st.session_state.contexts, key="existing_context")
             uploaded_files = st.file_uploader(f"Add file to {selected_context}", type=['json', 'pdf', 'csv', 'txt', 'md'], accept_multiple_files=True, key="existing_context_files")
-
+            url_input = st.text_input(f"Add Web Page to {selected_context}")
             if st.button("Add Files", key="add_to_existing_context", use_container_width=True):
                 ContextInterface._process_uploaded_files(selected_context, uploaded_files)
+                ContextInterface._process_url(selected_context, url_input)
 
     @staticmethod
     def _process_uploaded_files(context: str, files: List[Any]):
@@ -104,11 +105,16 @@ class ContextInterface:
                 status_text = st.empty()
                 for i, file in enumerate(files):
                     status_text.text(f"Processing file {i+1} of {total_files}: {file.name}")
-                    context_service.update(context, file)
+                    context_service.add_file(context, file)
                     progress_bar.progress((i + 1) / total_files)
                 progress_bar.empty()
                 status_text.empty()
             st.toast(f"Context '{context}' updated successfully!")
+
+    @staticmethod
+    def _process_url(context: str, url: str):
+        if url is not None:
+            context_service.add_webpage(context, url)
 
     @staticmethod
     def _refresh_context_list():
