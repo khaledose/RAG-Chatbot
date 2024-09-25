@@ -25,17 +25,16 @@ Install the required packages:
 Create a `.env` file in the root directory with the following structure:
 
 ```
-API_URL=<LM_STUDIO_SERVER_URL>
+API_URL=<API_URL>
 ```
 
 ## Running the Application
 
-1. Run the Streamlit app:
-   ```
-   streamlit run app.py
-   ```
+Run the Streamlit app:
 
-2. Open your web browser and go to `http://localhost:8501`
+```
+streamlit run app.py
+```
 
 ## Project Structure
 
@@ -43,10 +42,10 @@ API_URL=<LM_STUDIO_SERVER_URL>
 .
 ├── app.py
 ├── services
-│   ├── base.py
-│   ├── chat.py
-│   ├── session.py
-│   └── vector_store.py
+│   ├── BaseService.py
+│   ├── ChatService.py
+│   ├── SessionService.py
+│   └── ContextService.py
 ├── .env
 ├── requirements.txt
 └── README.md

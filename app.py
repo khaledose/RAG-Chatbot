@@ -3,25 +3,25 @@ from typing import List
 import streamlit as st
 from typing import Any
 from dotenv import load_dotenv
-from services.chat import ChatService
-from services.session import SessionService
-from services.vector_store import VectorStoreService
+from services.ChatService import ChatService
+from services.SessionService import SessionService
+from services.ContextService import ContextService
 
 # Initialize services
 load_dotenv()
 url = os.getenv('API_URL')
-session_service = SessionService(url)
-vector_store_service = VectorStoreService(url)
-chat_service = ChatService(url)
+session_service = SessionService(f'{url}/sessions')
+context_service = ContextService(f'{url}/contexts')
+chat_service = ChatService(f'{url}/chat')
 
 class SessionInterface:
     @staticmethod
     def render():
         st.sidebar.selectbox(
             "Select context", 
-            st.session_state.existing_stores, 
-            key="chat_store", 
-            on_change=SessionInterface._store_changed,
+            st.session_state.contexts, 
+            key="chat_context", 
+            on_change=SessionInterface._context_changed,
         )
         
         if st.sidebar.button("New Session", use_container_width=True):
@@ -52,11 +52,11 @@ class SessionInterface:
     def _switch_session(session_id: str):
         st.session_state.session_id = session_id
         st.session_state.messages = SessionInterface._get_session_messages(session_id)
-        SessionInterface._store_changed()
+        SessionInterface._context_changed()
     
     @staticmethod
-    def _store_changed():
-        chat_service.build(st.session_state.chat_store)
+    def _context_changed():
+        chat_service.build(st.session_state.chat_context)
 
     @staticmethod
     def _delete_session(session_id: str):
@@ -79,24 +79,24 @@ class SessionInterface:
         messages = session_service.get(session_id)
         return [{"role": m.get('type'), "content": m.get('content')} for m in messages["messages"]]
 
-class VectorStoreInterface:
+class ContextInterface:
     @staticmethod
     def render():
-        VectorStoreInterface._render_update()
-        VectorStoreInterface._render_create()
-        VectorStoreInterface._render_delete()
+        ContextInterface._render_update()
+        ContextInterface._render_create()
+        ContextInterface._render_delete()
 
     @staticmethod
     def _render_update():
-        with st.sidebar.expander("Update Store"):
-            selected_store = st.selectbox("Select Vector Store", st.session_state.existing_stores, key="existing_store")
-            uploaded_files = st.file_uploader(f"Add file to {selected_store}", type=['json', 'pdf', 'csv'], accept_multiple_files=True, key="existing_store_files")
+        with st.sidebar.expander("Update Context"):
+            selected_context = st.selectbox("Select Context", st.session_state.contexts, key="existing_context")
+            uploaded_files = st.file_uploader(f"Add file to {selected_context}", type=['json', 'pdf', 'csv', 'txt', 'md'], accept_multiple_files=True, key="existing_context_files")
 
-            if st.button("Add Files", key="add_to_existing_store", use_container_width=True):
-                VectorStoreInterface._process_uploaded_files(selected_store, uploaded_files)
+            if st.button("Add Files", key="add_to_existing_context", use_container_width=True):
+                ContextInterface._process_uploaded_files(selected_context, uploaded_files)
 
     @staticmethod
-    def _process_uploaded_files(store: str, files: List[Any]):
+    def _process_uploaded_files(context: str, files: List[Any]):
         with st.spinner("Reading files.."):
             total_files = len(files)
             if total_files > 0:
@@ -104,36 +104,36 @@ class VectorStoreInterface:
                 status_text = st.empty()
                 for i, file in enumerate(files):
                     status_text.text(f"Processing file {i+1} of {total_files}: {file.name}")
-                    vector_store_service.update(store, file)
+                    context_service.update(context, file)
                     progress_bar.progress((i + 1) / total_files)
                 progress_bar.empty()
                 status_text.empty()
-            st.toast(f"Vector store '{store}' updated successfully!")
+            st.toast(f"Context '{context}' updated successfully!")
 
     @staticmethod
-    def _refresh_store_list():
-        st.session_state.existing_stores = vector_store_service.get_all()
+    def _refresh_context_list():
+        st.session_state.contexts = context_service.get_all()
         st.rerun()
 
     @staticmethod
     def _render_create():
-        with st.sidebar.expander("Create store"):
-            new_store_name = st.text_input("New Vector Store", key="new_store_name")
-            if st.button("Create", key="create_new_store", use_container_width=True):
-                vector_store_service.create(new_store_name)
-                VectorStoreInterface._refresh_store_list()
+        with st.sidebar.expander("Create Context"):
+            new_context_name = st.text_input("Name", key="new_context_name")
+            if st.button("Create", key="create_new_context", use_container_width=True):
+                context_service.create(new_context_name)
+                ContextInterface._refresh_context_list()
 
     @staticmethod
     def _render_delete():
-        with st.sidebar.expander("Delete store"):
-            delete_store = st.selectbox("Select Vector Store", st.session_state.existing_stores, key="delete_store")
-            if delete_store == st.session_state.chat_store:
-                st.error("Cannot delete store that is already selected!")
+        with st.sidebar.expander("Delete Context"):
+            delete_context = st.selectbox("Select Context", st.session_state.contexts, key="delete_context")
+            if delete_context == st.session_state.chat_context:
+                st.error(f"Cannot delete {delete_context} that is already selected!")
             
-            delete_button = st.button("Delete", use_container_width=True, disabled=delete_store == st.session_state.chat_store)
+            delete_button = st.button("Delete", use_container_width=True, disabled=delete_context == st.session_state.chat_context)
             if delete_button:
-                vector_store_service.delete(delete_store)
-                VectorStoreInterface._refresh_store_list()
+                context_service.delete(delete_context)
+                ContextInterface._refresh_context_list()
 
 class ChatInterface:
     @staticmethod
@@ -160,7 +160,7 @@ class ChatInterface:
         response_placeholder = st.empty()
         full_response = ""
         
-        for chunk in chat_service.chat(st.session_state.chat_store, st.session_state.session_id, prompt):
+        for chunk in chat_service.chat(st.session_state.chat_context, st.session_state.session_id, prompt):
             full_response += chunk
             response_placeholder.markdown(full_response + "▌")
         
@@ -172,25 +172,29 @@ class App:
     def initialize_session_state():
         if "session_id" not in st.session_state:
             st.session_state.session_id = None
-        if "existing_stores" not in st.session_state:
-            st.session_state.existing_stores = vector_store_service.get_all()
+        if "contexts" not in st.session_state:
+            st.session_state.contexts = context_service.get_all()
         if 'sessions' not in st.session_state:
-            st.session_state['sessions'] = session_service.get_all()
+            st.session_state.sessions = session_service.get_all()
         if "messages" not in st.session_state:
             st.session_state.messages = []
 
     @staticmethod
     def render():
-        st.title("💬 Stream Buddy")
+        st.title("Admin Dashboard")
         App.initialize_session_state()
 
-        st.sidebar.header("Manage Session")
+        st.sidebar.header("Session Management")
         SessionInterface.render()
         
-        st.sidebar.header("Manage Vector Stores")
-        VectorStoreInterface.render()
+        st.sidebar.header("Context Management")
+        ContextInterface.render()
 
-        if st.session_state.chat_store is not None and st.session_state.session_id is not None:
+        if st.session_state.chat_context is None:
+            st.warning("Please select a context.")
+        elif st.session_state.session_id is None:
+            st.warning("Please Select a session.")
+        else:
             ChatInterface.render()
 
 if __name__ == "__main__":
